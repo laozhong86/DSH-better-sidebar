@@ -33,6 +33,7 @@ import { parentOf, requireAbsolute, listDirectory, rootLabel } from './fs-tree.t
 import { resolveSessionPath } from './session-path.ts'
 import { renameWorkspaceEntry, removeWorkspaceEntry, writeWorkspaceUpload } from './fs-operations.ts'
 import { ensureWorkspacePath, ensureWorkspaceWritePath } from './path-security.ts'
+import { buildHtmlPreview } from './html-preview-document.ts'
 import { searchFiles } from './fs-search.ts'
 import { decodeHtmlUrl } from './html-route.ts'
 import { extractFrameAncestors } from './browser-probe.ts'
@@ -94,6 +95,13 @@ const MEDIA_TYPES: Record<string, string> = {
   '.pdf': 'application/pdf',
   '.html': 'text/html',
   '.htm': 'text/html',
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
 }
 
 /** Content type served by /sidebar/file (binary-safe fallback for unknowns). */
@@ -213,7 +221,7 @@ async function readText(path: string, readLimit: number): Promise<{
 }
 
 /** One API method dispatch table entry. */
-type ApiMethod = (payload: unknown) => Promise<unknown> | unknown
+type ApiMethod = (payload: unknown, signal?: AbortSignal) => Promise<unknown> | unknown
 
 /**
  * The live face of the side card settings namespace, bound to the settings
@@ -341,6 +349,14 @@ function buildApi(
       const { cwd } = await cwdOf(payload)
       const query = requireString(payload, 'query')
       return searchFiles(cwd, query)
+    },
+    'html.preview': async (payload, signal) => {
+      const sessionId = requireString(payload, 'sessionId')
+      const attached = ctx.sessions.get(sessionId)?.header.cwd
+      const persistence = ctx.get('sessionPersistence')
+      const cwd = attached || (persistence ? (await persistence.inspect(sessionId)).meta.cwd : undefined)
+      if (!cwd) throw new SidebarError('preview-workspace', 'Authoritative session workspace is unavailable')
+      return buildHtmlPreview(requireAbsolute(cwd), requireString(payload, 'path'), resolved, signal)
     },
     'fs.read': async (payload) => {
       const { cwd } = await cwdOf(payload)
@@ -875,7 +891,11 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
         if (handler === undefined) {
           throw new SidebarError('not-found', `unknown sidebar API method "${method}"`, 404)
         }
-        writeOk(res, await handler(payload))
+        const abort = new AbortController()
+        const closed = (): void => { abort.abort() }
+        res.on?.('close', closed)
+        try { writeOk(res, await handler(payload, abort.signal)) }
+        finally { res.off?.('close', closed) }
       } catch (error) {
         writeError(res, error)
       }

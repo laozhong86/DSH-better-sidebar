@@ -41,60 +41,16 @@ function viewerProps(store: ReturnType<typeof createSidebarStore>, overrides: Pa
 }
 
 describe('HTML preview iframe sandbox', () => {
-  it('renders the preview iframe with the exact sandbox tokens and no same-origin / top-navigation', () => {
+  it.each([[false, false], [true, false], [false, true], [true, true]])('loads a saved snapshot without an unsafe escape hatch (%s, %s)', (htmlViewerNoSandbox, htmlViewerDefaultUnsafe) => {
     const store = createSidebarStore()
+    store.setPrefs({ ...store.getPrefs(), htmlViewerNoSandbox, htmlViewerDefaultUnsafe })
     const html = renderToString(createElement(TextEditor, viewerProps(store)))
-    const iframe = /<iframe[^>]*>/.exec(html)?.[0]
-    expect(iframe).toBeDefined()
-    // The sandbox tokens are exactly the exported constant...
-    expect(iframe).toContain(`sandbox="${HTML_IFRAME_SANDBOX}"`)
-    // ...which must never contain the dangerous tokens.
+    expect(html).toContain('role="status"')
+    expect(html).not.toContain('/sidebar/html/')
+    expect(html).not.toContain('临时解锁')
+    expect(html).not.toContain('恢复沙箱')
     expect(HTML_IFRAME_SANDBOX).not.toContain('allow-same-origin')
     expect(HTML_IFRAME_SANDBOX).not.toContain('allow-top-navigation')
-    // Cross-origin framing by construction: route-src (never srcdoc).
-    expect(iframe).toContain('src="/sidebar/html/s1/p/a/index.html"')
-    expect(iframe).not.toContain('srcdoc=')
-    // Referrer + permissions policy stay locked even when sandboxed.
-    // (React SSR renders the referrerPolicy prop camelCase as written.)
-    expect(iframe).toContain('referrerPolicy="no-referrer"')
-    expect(iframe).toContain('allow=""')
-  })
-
-  it('renders the live sandbox status row (green on + temporary unlock action)', () => {
-    const store = createSidebarStore()
-    const html = renderToString(createElement(TextEditor, viewerProps(store)))
-    // Sandbox ON: the green status + the one-tap temporary unlock button.
-    expect(html).toContain('沙箱模式：已启用')
-    expect(html).toContain('临时解锁（不安全）')
-    // No restore action while the sandbox is on.
-    expect(html).not.toContain('恢复沙箱')
-  })
-
-  it('drops the sandbox attribute with the red warning when the setting is on (no restore action — the global setting owns it)', () => {
-    const store = createSidebarStore()
-    store.setPrefs({ ...store.getPrefs(), htmlViewerNoSandbox: true })
-    const html = renderToString(createElement(TextEditor, viewerProps(store)))
-    const iframe = /<iframe[^>]*>/.exec(html)?.[0]
-    expect(iframe).toBeDefined()
-    expect(iframe).not.toContain('sandbox=')
-    // The red persistent warning copy is rendered; the temporary-unlock
-    // action is NOT offered (re-enabling is the settings page's job).
-    expect(html).toContain('沙箱已关闭')
-    expect(html).not.toContain('临时解锁（不安全）')
-    expect(html).not.toContain('恢复沙箱')
-  })
-
-  it('starts unsandboxed (red, restorable) when the default-unsafe pref is on', () => {
-    const store = createSidebarStore()
-    store.setPrefs({ ...store.getPrefs(), htmlViewerDefaultUnsafe: true })
-    const html = renderToString(createElement(TextEditor, viewerProps(store)))
-    const iframe = /<iframe[^>]*>/.exec(html)?.[0]
-    expect(iframe).toBeDefined()
-    expect(iframe).not.toContain('sandbox=')
-    // The red warning + the one-tap restore (this is the LOCAL state).
-    expect(html).toContain('沙箱已关闭')
-    expect(html).toContain('恢复沙箱')
-    expect(html).not.toContain('临时解锁（不安全）')
   })
 
   it('markdown preview keeps rendering markdown, not an iframe', () => {
@@ -127,20 +83,11 @@ describe('changes tab HTML render preview sandbox', () => {
     }
   }
 
-  it('render iframe is ALWAYS sandboxed (no escape hatch) with the route src, never srcdoc', () => {
-    const html = renderToString(createElement(HtmlRenderPreview, { src: '/sidebar/html/s1/p/a/index.html', title: '/p/a/index.html' }))
-    const iframe = /<iframe[^>]*>/.exec(html)?.[0]
-    expect(iframe).toBeDefined()
-    // The sandbox tokens are exactly the shared constant — and unlike the
-    // editor viewer this surface has NO no-sandbox escape hatch.
-    expect(iframe).toContain(`sandbox="${HTML_IFRAME_SANDBOX}"`)
-    expect(HTML_IFRAME_SANDBOX).not.toContain('allow-same-origin')
-    expect(HTML_IFRAME_SANDBOX).not.toContain('allow-top-navigation')
-    // Cross-origin framing by construction: route-src (never srcdoc).
-    expect(iframe).toContain('src="/sidebar/html/s1/p/a/index.html"')
-    expect(iframe).not.toContain('srcdoc=')
-    expect(iframe).toContain('referrerPolicy="no-referrer"')
-    expect(iframe).toContain('allow=""')
+  it('loads saved HTML through the shared snapshot component', () => {
+    const html = renderToString(createElement(HtmlRenderPreview, { scope: { sessionId: 's1', cwd: '/p' }, path: '/p/a/index.html' }))
+    expect(html).toContain('role="status"')
+    expect(html).not.toContain('/sidebar/html/')
+    expect(html).not.toContain('临时解锁')
   })
 
   it('html op targets show the render toggle (off by default, no iframe); non-html and error targets show none', () => {
