@@ -1,0 +1,37 @@
+classDiagram
+  class PreviewRequest {
+    +string sessionId
+    +string cwd
+    +string path
+  }
+  class PreviewSnapshot {
+    +string html
+    +string revision
+    +PreviewWarning[] warnings
+    +number resourceCount
+    +number byteLength
+  }
+  class PreviewResourceReader {
+    +__init__(workspace, limits)
+    +read(referrer, specifier, kind) Resource
+    +dispose() void
+  }
+  class PreviewDocumentBuilder {
+    +__init__(reader)
+    +build(request) Promise~PreviewSnapshot~
+    +rewriteHtml(ast) string
+    +rewriteCss(css, base) string
+    +rewriteModule(source, base) string
+  }
+  class HtmlPreviewController {
+    +number generation
+    +AbortController abort
+    +__init__(api)
+    +load(scope, path) void
+    +refresh() void
+    +dispose() void
+  }
+  PreviewDocumentBuilder --> PreviewResourceReader : bounded authorized reads
+  PreviewDocumentBuilder --> PreviewRequest : consumes
+  PreviewDocumentBuilder --> PreviewSnapshot : produces
+  HtmlPreviewController --> PreviewSnapshot : renders opaque iframe

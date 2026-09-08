@@ -1,0 +1,26 @@
+sequenceDiagram
+  actor User
+  participant Editor as HtmlPreviewController
+  participant API as sidebar API / trust fence
+  participant Builder as PreviewDocumentBuilder
+  participant Reader as PreviewResourceReader
+  participant Frame as Opaque iframe
+  User->>Editor: 打开已保存 HTML
+  Editor->>API: html.preview(sessionId,cwd,path), signal
+  API->>API: 宿主鉴权、来源 fence、权威 workspace
+  API->>Builder: build(request)
+  Builder->>Reader: read(root及静态引用)
+  Reader->>Reader: canonical containment / MIME / budgets
+  Reader-->>Builder: 已授权字节
+  Builder-->>API: PreviewSnapshot
+  API-->>Editor: ok/value（不含凭据）
+  Editor->>Editor: generation检查
+  Editor->>Frame: 固定 sandbox + srcDoc
+  Frame->>Frame: 脚本/自身无特权导航
+  Note over Frame,API: 不存在 frame 文件 RPC 或 parent 代理
+  User->>Editor: 编辑并保存
+  Editor->>API: 既有 fs.write
+  API-->>Editor: 保存成功
+  Editor->>Editor: abort旧任务并refresh
+  User->>Editor: 关闭/删文件/切换路径
+  Editor->>Editor: dispose，清理旧frame/响应

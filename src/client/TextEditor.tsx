@@ -21,13 +21,13 @@ import { EditorView as CodeMirrorView, keymap, lineNumbers } from '@codemirror/v
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { IconCheckOutline16, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import { markdownTextProps } from './markdown-labels.tsx'
-import { api, htmlUrl } from './api.ts'
+import { api } from './api.ts'
 import { markdownPreviewSource } from './markdown-frontmatter.ts'
 import { rewriteLocalImageUrls } from './markdown-images.ts'
 import { languageForPath } from './lang.ts'
 import { cmSurfaceTheme, CmThemeCompartment } from './cm-themes.ts'
 import { isDarkScheme, subscribeColorScheme } from './theme.ts'
-import { SandboxStatusBar } from './SandboxStatusBar.tsx'
+import { HtmlPreview } from './HtmlPreview.tsx'
 import { appendToDraft } from './conversation-draft.ts'
 import { useSelectionPopup } from './selection-popup.ts'
 import { buildSelectionInsert, linesOfSelection } from './selection-payload.ts'
@@ -36,7 +36,6 @@ import { LazyMermaidMarkdown, MarkdownDocument, type MarkdownHtmlMedia } from '.
 import { MdToc } from './md-toc.tsx'
 import { splitMermaidBlocks } from './mermaid-blocks.ts'
 import { t } from './locales.ts'
-import { HTML_IFRAME_SANDBOX } from './html-preview.ts'
 import type { EditorToolbarState, FileViewerProps } from './service.ts'
 import css from './sidebar.module.css'
 
@@ -297,6 +296,7 @@ export function TextEditor(props: FileViewerProps) {
       setDraft(null)
       setDirty(false)
       setSaveState('saved')
+      setPreviewGeneration(value => value + 1)
     }).catch(() => {
       savingRef.current = false
       setSaveState('failed')
@@ -399,15 +399,7 @@ export function TextEditor(props: FileViewerProps) {
   }
   const editable = content !== undefined
   const saveLabel = saveState === 'saving' ? t('loading') : saveState === 'saved' ? t('saved') : saveState === 'failed' ? t('saveFailed') : ''
-  // Per-feature sandbox escape hatch: the global side card setting (warned)
-  // plus a per-surface temporary unlock. The unlock state starts at the
-  // "default unsafe" pref so a preview can open straight into the red
-  // unsandboxed state (still restorable from the status row). With the
-  // sandbox OFF the preview iframe drops its sandbox attribute entirely —
-  // the previewed page then runs on the GUI's own origin with full session
-  // access.
-  const [localUnlock, setLocalUnlock] = useState(() => props.store?.getPrefs().htmlViewerDefaultUnsafe === true)
-  const htmlNoSandbox = props.store?.getPrefs().htmlViewerNoSandbox === true || localUnlock
+  const [previewGeneration, setPreviewGeneration] = useState(0)
 
   // Host-toolbar mode (the merged editor header renders the controls): skip
   // the own toolbar row, report the state after every relevant render (the
@@ -537,27 +529,7 @@ export function TextEditor(props: FileViewerProps) {
         </div>
       )}
       {html && mode === 'preview' && (
-        <>
-          <SandboxStatusBar
-            sandboxed={!htmlNoSandbox}
-            local={localUnlock}
-            dangerCopy={t('htmlNoSandboxWarning')}
-            onUnlock={() => { setLocalUnlock(true) }}
-            onRestore={() => { setLocalUnlock(false) }}
-          />
-          {/* Route-src (never srcdoc — a srcdoc frame inherits the parent
-              origin when unsandboxed; the route URL keeps the frame
-              cross-origin by construction). The preview shows the SAVED
-              file; the draft is only visible in edit mode. */}
-          <iframe
-            className={css.editorHtml}
-            src={htmlUrl(scope, path)}
-            sandbox={htmlNoSandbox ? undefined : HTML_IFRAME_SANDBOX}
-            referrerPolicy="no-referrer"
-            allow=""
-            title={path}
-          />
-        </>
+        <HtmlPreview scope={scope} path={path} generation={previewGeneration} className={css.editorHtml} />
       )}
       {selectionPopup.popup !== null && createPortal(
         <button

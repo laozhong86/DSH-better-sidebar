@@ -248,14 +248,10 @@ describe('built-in file viewer registrations', () => {
     expect(service.matchFileViewer('index.HTML')?.id).toBe('html')
   })
 
-  it('the html viewer declares its sandbox and default-unsafe related settings', () => {
+  it('the html viewer exposes no sandbox escape settings', () => {
     const { service } = setup()
     const toggles = service.getFileViewers().find(v => v.id === 'html')?.settings?.toggles ?? []
-    expect(toggles.map(t => t.key)).toEqual(['htmlViewerNoSandbox', 'htmlViewerDefaultUnsafe'])
-    expect(toggles[0]?.title).toBeDefined()
-    expect(toggles[0]?.desc).toBeDefined()
-    expect(toggles[1]?.title).toBeDefined()
-    expect(toggles[1]?.desc).toBeDefined()
+    expect(toggles).toEqual([])
   })
 
   it('binary-download claims legacy office by extension (office previews are not built in)', () => {

@@ -8,6 +8,7 @@ import type { SidebarHttpRequest, SidebarHttpResponse } from './context-types.ts
 
 /** Machine-readable error codes of the sidebar API. */
 export type SidebarErrorCode =
+  | `preview-${string}`
   | 'bad-request'
   | 'not-found'
   | 'forbidden'

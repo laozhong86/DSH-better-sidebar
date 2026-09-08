@@ -7,6 +7,7 @@
  * request). Failures surface as {@link SidebarApiError} with the wire code.
  */
 import { encodeHtmlUrl } from '../html-route.ts'
+import type { PreviewSnapshot } from '../html-preview-types.ts'
 import type { LastActivity } from '../subagent-activity.ts'
 import type { SidechatLogEvent, SidechatThreadInfo } from '../sidechat-core.ts'
 import type { SidebarSessionEvent } from '../context-types.ts'
@@ -266,6 +267,8 @@ function openExternal(payload: OpenExternalPayload): Promise<OpenExternalResult>
 
 /** The sidebar API surface (session scope threaded through every call). */
 export const api = {
+  htmlPreview: (scope: SessionScope, path: string, signal?: AbortSignal) =>
+    call<PreviewSnapshot>('html.preview', { sessionId: scope.sessionId, cwd: scope.cwd, path }, signal),
   sessionCwd: (scope: SessionScope, signal?: AbortSignal) =>
     call<{ sessionId: string; cwd: string; root: string; parent: string | null }>('session.cwd', scopePayload(scope, {}), signal),
   fsTree: (scope: SessionScope, path: string, signal?: AbortSignal) =>

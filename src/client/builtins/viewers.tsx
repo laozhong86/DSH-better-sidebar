@@ -84,20 +84,6 @@ export function builtinViewers(): readonly FileViewerDescriptor[] {
       icon: (size: number) => <IconHtmlOutline16 size={size} />,
       exts: ['html', 'htm'],
       fetchStrategy: 'fsRead',
-      // Declarative settings: the sandbox escape hatch and the default-unsafe
-      // start state render under this viewer's row in the Side card settings
-      // page (both warned on).
-      settings: {
-        toggles: [{
-          key: 'htmlViewerNoSandbox',
-          title: () => t('settingsHtmlSandboxTitle'),
-          desc: () => t('settingsHtmlSandboxDesc'),
-        }, {
-          key: 'htmlViewerDefaultUnsafe',
-          title: () => t('settingsHtmlDefaultUnsafeTitle'),
-          desc: () => t('settingsHtmlDefaultUnsafeDesc'),
-        }],
-      },
       component: (props) => <LazyTextEditor {...props} />,
     },
     {
