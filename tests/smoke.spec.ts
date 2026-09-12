@@ -81,6 +81,18 @@ describe('host plugin smoke', () => {
     expect(mediaTypeForPath('/work/archive.bin')).toBe('application/octet-stream')
   })
 
+  it.each([
+    ['style.CSS', 'text/css; charset=utf-8'],
+    ['script.js', 'text/javascript; charset=utf-8'],
+    ['module.mjs', 'text/javascript; charset=utf-8'],
+    ['font.woff', 'font/woff'],
+    ['font.woff2', 'font/woff2'],
+    ['font.ttf', 'font/ttf'],
+    ['font.otf', 'font/otf'],
+  ])('serves %s with its stylesheet, script, or font MIME type', (path, type) => {
+    expect(mediaTypeForPath(`/work/${path}`)).toBe(type)
+  })
+
   it('mounts the fenced routes', () => {
     const routes: SidebarWebRoute[] = []
     const upgrades: SidebarWebUpgradeRoute[] = []
@@ -555,6 +567,23 @@ describe('session cwd resolution over the API route', () => {
     await route.handler(req, res)
     return out
   }
+
+  it('html.preview ignores arbitrary client cwd and requires authoritative workspace', async () => {
+    const missing = await invoke(mount(), 'html.preview', { sessionId: 'missing', cwd: process.cwd(), path: 'index.html' })
+    expect(missing.error?.code).toBe('preview-workspace')
+    const workspace = mkdtempSync(join(tmpdir(), 'preview-api-'))
+    const outside = mkdtempSync(join(tmpdir(), 'preview-outside-'))
+    try {
+      writeFileSync(join(workspace, 'index.html'), '<script>window.saved=true</script>')
+      writeFileSync(join(outside, 'index.html'), '<p>outside</p>')
+      const route = mount({ sessions: { get: () => ({ header: { cwd: workspace } }) } })
+      const result = await invoke(route, 'html.preview', { sessionId: 'preview', cwd: outside, path: join(workspace, 'index.html') })
+      expect(result.ok).toBe(true)
+      expect(result.value).toMatchObject({ html: expect.stringContaining('window.saved=true'), resourceCount: 1 })
+      const denied = await invoke(route, 'html.preview', { sessionId: 'preview', cwd: outside, path: join(outside, 'index.html') })
+      expect(denied.error?.code).toBe('forbidden')
+    } finally { rmSync(workspace, { recursive: true, force: true }); rmSync(outside, { recursive: true, force: true }) }
+  })
 
   it('uses the client summary cwd while the session is detached', async () => {
     const route = mount()

@@ -483,6 +483,8 @@ interface FileViewerProps {
 > **内置 viewer**（不可重复注册，全部 6 个）：image(0) / pdf(0) / markdown(0, fsRead；内嵌 HTML 支持：DOMPurify 白名单消毒、`<details>` 跨段嵌套、本地媒体 src 重写走 `/sidebar/file`；≥3 标题时浮动目录大纲。实现 `markdown-html.ts` / `MarkdownHtml.tsx` / `md-toc.tsx`，[设计文档](plans/2026-08-24-markdown-html-toc-design.md)) / html(0, fsRead, 沙箱 iframe 预览) / code(-100, catch-all, fsRead) / binary-download(-50, exts doc/xls/ppt + NUL detect)。Office 三件套预览（.docx/.xlsx/.pptx）**不再内置**——已迁至推荐插件（设置页「添加插件」→ 文件预览弹窗里的 Office 预览插件），以相同 id 注册。
 > code 是兜底 viewer：任何其他 viewer 未认领的文件都会落到 code（CodeMirror 文本编辑）；二进制文件经 head 重匹配被 binary-download 的 NUL detect 认领（下载按钮）。外部 viewer 注册同扩展名 + 更高 priority 即可覆盖。
 
+HTML 预览（编辑器与 changes 两入口）由受信 GUI 调用 `html.preview` 获取已保存文件的有界静态快照，然后交给永久 opaque 的 `srcDoc` iframe。旧 `htmlViewerNoSandbox` / `htmlViewerDefaultUnsafe` 值不再生效，也不提供解锁控件；BrowserView 独立策略不变。快照只读取权威会话 workspace 内的静态 HTML/CSS/JS、图片、字体及媒体，支持同 workspace 的 `../shared`、嵌套 CSS 和无环模块。根/单资源受 readLimit/mediaLimit 限制，总输入和输出各 16 MiB、128 本地文件、深度 16；未知类型、越界和不支持的复杂模块显示具体错误，不返回截断 HTML。远程资源继续由无特权 frame 原生加载，不提供凭据、文件 RPC 或网络代理；不承诺绝对禁网或禁止自身导航。完整契约见 [Issue #1 设计](issue-1-preview-security-design.md)。
+
 ### 5.5 注册示例
 
 **CSV 预览器**（自定义加载 + 渲染）：
