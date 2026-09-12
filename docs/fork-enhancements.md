@@ -59,6 +59,11 @@
   （`src/client/plugins-viewers.ts`）；音频连推荐插件都没有。
 - fork 理由：OmniMux 预置 profile 未安装 `dsh-video-preview`，桌面产品要求开箱即用。
   若将来决定改为依赖外部插件，这一段可以整体删除。
+- **需要留意的重叠**：OmniMux 产品侧另有一个 `omnimux-video-preview` 插件
+  （`dsh-plugin/product/omnimux-dsh/plugins/omnimux-video-preview`，注册
+  `omnimux-video-preview` 与 `omnimux-video-breakdown` 两个 viewer），当前**不在**
+  `~/.dsh/profiles/omnimux` 的 `dsh.profile.bundles` 里、未激活。一旦启用它，需要
+  裁定内置的 video descriptor 是否退出（音频不受影响——那个插件不覆盖音频）。
 
 ### 4. 工具展示的媒体计入本轮产出
 

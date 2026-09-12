@@ -98,6 +98,15 @@ const MEDIA_TYPES: Record<string, string> = {
   '.pdf': 'application/pdf',
   '.html': 'text/html',
   '.htm': 'text/html',
+  // Stylesheet / script / font types a previewed page links to (the fenced
+  // asset route serves them alongside the document).
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
   '.mp4': 'video/mp4',
   '.webm': 'video/webm',
   '.mov': 'video/quicktime',
