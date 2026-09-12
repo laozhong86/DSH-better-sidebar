@@ -1,6 +1,6 @@
 /**
- * The 6 built-in file viewer descriptors: every preview surface is a
- * registered viewer (image / pdf / markdown / html / code /
+ * The 8 built-in file viewer descriptors: every preview surface is a
+ * registered viewer (image / video / audio / pdf / markdown / html / code /
  * binary-download), exactly like external plugins register theirs. Office
  * previews (.docx / .xlsx / .pptx) are NOT built in anymore — they moved to
  * the recommended office plugin (see plugins-viewers.ts), which registers
@@ -31,6 +31,8 @@ import {
   IconMarkdownOutline16,
   IconPdfOutline16,
   IconHtmlOutline16,
+  IconVideoOutline16,
+  IconAudioOutline16,
 } from '../icons.tsx'
 import type { ComponentType } from 'react'
 import type { FileViewerDescriptor, FileViewerProps } from '../service.ts'
@@ -61,6 +63,34 @@ export function builtinViewers(): readonly FileViewerDescriptor[] {
       ),
     },
     {
+      id: 'video',
+      title: () => t('viewerVideo'),
+      icon: (size: number) => <IconVideoOutline16 size={size} />,
+      exts: ['mp4', 'webm', 'mov', 'm4v', 'ogv'],
+      // Same media route as images, but stepped up to byte-range streaming:
+      // the player seeks inside a large file instead of waiting for the whole
+      // body, and nothing is buffered on the host (see the range branch in
+      // index.ts's /sidebar/file handler).
+      fetchStrategy: 'mediaUrl',
+      component: ({ mediaUrl: url, title }) => (
+        <div className={css.mediaStage}>
+          <video className={css.mediaVideo} src={url} title={title} controls playsInline />
+        </div>
+      ),
+    },
+    {
+      id: 'audio',
+      title: () => t('viewerAudio'),
+      icon: (size: number) => <IconAudioOutline16 size={size} />,
+      exts: ['mp3', 'wav', 'flac', 'ogg', 'm4a', 'opus', 'aac'],
+      fetchStrategy: 'mediaUrl',
+      component: ({ mediaUrl: url, title }) => (
+        <div className={css.mediaStage}>
+          <audio className={css.mediaAudio} src={url} title={title} controls />
+        </div>
+      ),
+    },
+    {
       id: 'pdf',
       title: () => t('viewerPdf'),
       icon: (size: number) => <IconPdfOutline16 size={size} />,
@@ -84,6 +114,8 @@ export function builtinViewers(): readonly FileViewerDescriptor[] {
       icon: (size: number) => <IconHtmlOutline16 size={size} />,
       exts: ['html', 'htm'],
       fetchStrategy: 'fsRead',
+      // No sandbox escape hatch: the preview frame is always an opaque origin
+      // (see HtmlPreview.tsx), so this viewer exposes no unlock toggle.
       component: (props) => <LazyTextEditor {...props} />,
     },
     {

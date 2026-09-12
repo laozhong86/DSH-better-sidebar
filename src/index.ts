@@ -13,12 +13,13 @@
  * session's authoritative cwd comes from the session store, and terminal
  * processes are keyed by session.
  */
+import { createReadStream } from 'node:fs'
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, isAbsolute, join } from 'node:path'
 import type { IncomingMessage } from 'node:http'
-import type { Duplex } from 'node:stream'
+import type { Duplex, Writable } from 'node:stream'
 import { WebSocket, WebSocketServer } from 'ws'
-import type { Context, SidebarHttpRequest, SidebarSessionEvent } from './context-types.ts'
+import type { Context, SidebarHttpRequest, SidebarHttpResponse, SidebarSessionEvent } from './context-types.ts'
 import {
   Config,
   PrefsSchema,
@@ -33,8 +34,8 @@ import { parentOf, requireAbsolute, listDirectory, rootLabel } from './fs-tree.t
 import { resolveSessionPath } from './session-path.ts'
 import { renameWorkspaceEntry, removeWorkspaceEntry, writeWorkspaceUpload } from './fs-operations.ts'
 import { ensureWorkspacePath, ensureWorkspaceWritePath } from './path-security.ts'
-import { buildHtmlPreview } from './html-preview-document.ts'
 import { searchFiles } from './fs-search.ts'
+import { buildHtmlPreview } from './html-preview-document.ts'
 import { decodeHtmlUrl } from './html-route.ts'
 import { extractFrameAncestors } from './browser-probe.ts'
 import { isTrustedApiRequest, isLoopbackHostname } from './trust-fence.ts'
@@ -42,7 +43,7 @@ import { registerBundleRoute } from './bundle-route.ts'
 import { launchExternal } from './open-external.ts'
 import * as git from './git.ts'
 import { SettingsConflictError } from '@deepseek-ai/dsh-settings'
-import { defaultShell, ensureSpawnHelper, PtyManager, shellDisplayName } from './pty-manager.ts'
+import { defaultShell, ensureSpawnHelper, PtyManager, shellDisplayName, splitShellArgs, unquotePath } from './pty-manager.ts'
 import { AgentPtyRegistry, armPtyResizeGate, tryResizePty, type AgentTerminalHandle } from './agent-pty.ts'
 import {
   DSH_NODE_PTY_RANGE,
@@ -55,7 +56,9 @@ import { AgentOpenRegistry, registerOpenTool, type AgentOpenRequest } from './ag
 import { buildJobsApi, type SidebarJobsRoutes } from './jobs-routes.ts'
 import { buildSubagentLiveApi, type SidebarSubagentLiveRoutes } from './subagent-live-route.ts'
 import { buildSidechatApi } from './sidechat-routes.ts'
+import { createAssistantLiveBuffer, type AssistantLiveBuffer } from './assistant-live.ts'
 import { readJsonBody, requireString, SidebarError, writeError, writeJson, writeOk } from './wire.ts'
+import { readPersistedSession, readPersistedSessionOf } from './session-store.ts'
 
 export { Config }
 export type { SidebarConfig, ResolvedSidebarConfig }
@@ -95,6 +98,8 @@ const MEDIA_TYPES: Record<string, string> = {
   '.pdf': 'application/pdf',
   '.html': 'text/html',
   '.htm': 'text/html',
+  // Stylesheet / script / font types a previewed page links to (the fenced
+  // asset route serves them alongside the document).
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
@@ -102,11 +107,84 @@ const MEDIA_TYPES: Record<string, string> = {
   '.woff2': 'font/woff2',
   '.ttf': 'font/ttf',
   '.otf': 'font/otf',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.m4v': 'video/x-m4v',
+  '.ogv': 'video/ogg',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.flac': 'audio/flac',
+  '.ogg': 'audio/ogg',
+  '.m4a': 'audio/mp4',
+  '.opus': 'audio/opus',
+  '.aac': 'audio/aac',
 }
 
 /** Content type served by /sidebar/file (binary-safe fallback for unknowns). */
 export function mediaTypeForPath(path: string): string {
   return MEDIA_TYPES[extname(path).toLowerCase()] ?? 'application/octet-stream'
+}
+
+/** Video/audio extensions the media route plays by byte range. */
+const STREAMABLE_MEDIA_EXTS = new Set([
+  '.mp4', '.webm', '.mov', '.m4v', '.ogv',
+  '.mp3', '.wav', '.flac', '.ogg', '.m4a', '.opus', '.aac',
+])
+
+/** Whether the path is a video/audio file (streamed rather than buffered). */
+function isStreamableMedia(path: string): boolean {
+  return STREAMABLE_MEDIA_EXTS.has(extname(path).toLowerCase())
+}
+
+/**
+ * Byte ceiling for a streamed media file. The image route keeps the
+ * configured `mediaLimit` (20 MiB by default) because it hands the whole
+ * body over at once; a video or audio file is read off disk slice by slice,
+ * so it gets this much larger ceiling instead.
+ */
+const MEDIA_STREAM_LIMIT = 500 * 1024 * 1024
+
+/**
+ * Parse a single `bytes=` range header into an inclusive window over `size`.
+ * Handles the `start-end`, `start-` and suffix (`-N`) forms; multi-range
+ * requests and malformed or unsatisfiable windows return null, which the
+ * caller answers with the ordinary 200 body.
+ */
+export function parseByteRange(header: string, size: number): { start: number; end: number } | null {
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim())
+  if (match === null) return null
+  const [, rawStart, rawEnd] = match
+  if (rawStart === '' && rawEnd === '') return null
+  let start: number
+  let end: number
+  if (rawStart === '') {
+    // Suffix form: the final N bytes.
+    const suffix = Number(rawEnd)
+    if (!Number.isSafeInteger(suffix) || suffix <= 0) return null
+    start = Math.max(size - suffix, 0)
+    end = size - 1
+  } else {
+    start = Number(rawStart)
+    end = rawEnd === '' ? size - 1 : Number(rawEnd)
+  }
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) return null
+  if (start < 0 || start >= size || end < start) return null
+  return { start, end: Math.min(end, size - 1) }
+}
+
+/** Stream a file to the response, a byte window of it when one is given.
+ *  The write face the routes use is a structural subset of the server
+ *  response, so it is widened to a stream here rather than at every call. */
+function pipeFile(path: string, res: SidebarHttpResponse, window?: { start: number; end: number }): void {
+  const writable = res as unknown as Writable
+  const stream = window === undefined
+    ? createReadStream(path)
+    : createReadStream(path, { start: window.start, end: window.end })
+  // The file can vanish between stat and open (deleted mid-read): fail the
+  // response instead of leaving an unhandled stream error.
+  stream.on('error', () => { writable.destroy() })
+  stream.pipe(writable)
 }
 
 /**
@@ -137,8 +215,8 @@ async function sessionCwdOf(ctx: Context, sessionId: string, clientCwd?: string)
   }
   const persistence = ctx.get('sessionPersistence')
   if (persistence !== undefined) {
-    const inspected = await persistence.inspect(sessionId)
-    const metaCwd = inspected.meta.cwd
+    const persisted = await readPersistedSession(persistence, sessionId)
+    const metaCwd = persisted.header.cwd
     if (metaCwd !== undefined && metaCwd !== '') {
       try {
         return requireAbsolute(metaCwd)
@@ -258,11 +336,11 @@ function shellOverridesOf(getSettings: () => SidebarSettingsFace | undefined): {
   const value = settings?.get().value
   if (value === null || typeof value !== 'object') return {}
   const record = value as Record<string, unknown>
-  const shell = typeof record.terminalShell === 'string' ? record.terminalShell.trim() : ''
+  const shell = typeof record.terminalShell === 'string' ? unquotePath(record.terminalShell.trim()) : ''
   const args = typeof record.terminalShellArgs === 'string' ? record.terminalShellArgs.trim() : ''
   return {
     shell: shell === '' ? undefined : shell,
-    shellArgs: args === '' ? undefined : args.split(/\s+/).filter(Boolean),
+    shellArgs: args === '' ? undefined : splitShellArgs(args),
   }
 }
 
@@ -306,6 +384,7 @@ function buildApi(
   resolved: ResolvedSidebarConfig,
   terminalShell: string,
   getSettings: () => SidebarSettingsFace | undefined,
+  assistantLive: AssistantLiveBuffer,
 ): Record<string, ApiMethod> {
   const cwdOf = async (payload: unknown): Promise<{ sessionId: string; cwd: string }> => {
     const sessionId = requireString(payload, 'sessionId')
@@ -350,12 +429,18 @@ function buildApi(
       const query = requireString(payload, 'query')
       return searchFiles(cwd, query)
     },
+    // The HTML preview snapshot. The untrusted preview frame is an opaque
+    // origin the /sidebar/html route cannot serve (its trust fence rejects
+    // sandboxed frames), so the trusted main GUI asks HERE for a fully
+    // self-contained document and hands the frame a string instead of a URL.
     'html.preview': async (payload, signal) => {
       const sessionId = requireString(payload, 'sessionId')
       const attached = ctx.sessions.get(sessionId)?.header.cwd
-      const persistence = ctx.get('sessionPersistence')
-      const cwd = attached || (persistence ? (await persistence.inspect(sessionId)).meta.cwd : undefined)
-      if (!cwd) throw new SidebarError('preview-workspace', 'Authoritative session workspace is unavailable')
+      const persisted = attached === undefined ? await readPersistedSessionOf(ctx, sessionId) : undefined
+      const cwd = attached ?? persisted?.header.cwd
+      if (cwd === undefined) {
+        throw new SidebarError('preview-workspace', 'Authoritative session workspace is unavailable')
+      }
       return buildHtmlPreview(requireAbsolute(cwd), requireString(payload, 'path'), resolved, signal)
     },
     'fs.read': async (payload) => {
@@ -490,7 +575,13 @@ function buildApi(
     'git.show': async (payload) => {
       const { cwd } = await gitCwdOf(payload)
       const repoRoot = selectedRepoOf(payload)
-      const path = await resolveGitPath(cwd, requireString(payload, 'path'), repoRoot)
+      // `git show <rev>:<path>` addresses the path inside the revision TREE:
+      // repository-relative, exactly the unified diff's own path form (after
+      // the a// b/ prefix). The absolute filesystem paths resolveGitPath
+      // produces would break the rev:path syntax and fail every read, so the
+      // path passes through as-is — it can only address blobs of this repo's
+      // own revisions, the same surface git.diff/git.log already expose.
+      const path = requireString(payload, 'path')
       const rev = requireString(payload, 'rev')
       return { content: await git.show(cwd, rev, path, repoRoot) }
     },
@@ -517,7 +608,7 @@ function buildApi(
         const persistence = ctx.get('sessionPersistence')
         if (persistence !== undefined) {
           try {
-            events = (await persistence.inspect(sessionId)).events
+            events = (await readPersistedSession(persistence, sessionId)).events
           } catch {
             // Cold read unavailable (session never persisted): an empty
             // window is the honest answer, not a wire error.
@@ -553,6 +644,17 @@ function buildApi(
       agentPtyRegistry?.close(uuid)
       return { ok: true }
     },
+    // The sidebar wait banner's skip button: abort every active
+    // terminal_wait_for on one agent terminal. An unknown uuid (a terminal
+    // already closed / reaped) goes through `expect` and surfaces as 404
+    // not-found; the client tolerates that and lets the next push converge.
+    // Nothing waiting on a live terminal is not an error: 0 skipped.
+    // Degraded mode (node-pty unavailable) has no registry and no waits: an
+    // honest ok.
+    'agent-pty.skip-wait': (payload) => {
+      const uuid = requireString(payload, 'uuid')
+      return { ok: true, skipped: agentPtyRegistry?.skipWait(uuid) ?? 0 }
+    },
     // Terminal dependency status (issue #140): after a WS close 1011 with
     // reason `pty-deps-missing` the client fetches the full repair details
     // here — the close reason itself is capped at 123 bytes, too small for
@@ -569,11 +671,14 @@ function buildApi(
     // Subagent live previews: one batch request per refresh; the route folds
     // the newest text/tool activity of every running child in the tree.
     'subagents.live': (payload) => subagentLiveApi.live(payload),
-    // The effective terminal shell and its display name. The client uses
-    // this to title terminal tabs with the shell name instead of a numbered
-    // "Terminal N" label; the shell itself is configured through
-    // `cordis.patch.yml` (`config.shell`) or resolved by the host default.
-    'shell.get': () => ({ shell: terminalShell, name: shellDisplayName(terminalShell) }),
+    // The effective terminal shell and its display name: the settings-page
+    // override when set (quotes stripped), else the boot-time resolution.
+    // The client titles terminal tabs with the name, so a changed setting is
+    // visible on the next opened tab without a plugin restart.
+    'shell.get': () => {
+      const effective = shellOverridesOf(getSettings).shell ?? terminalShell
+      return { shell: effective, name: shellDisplayName(effective) }
+    },
     // The side card preferences. The settings service is optional in the
     // composition; while absent the routes report undefined and the client
     // keeps the schema defaults. Writes are revision-guarded: a stale editor
@@ -701,7 +806,7 @@ function buildApi(
     // identities are fenced from the generic session RPCs (agent-lookup
     // ownership), and the thread is created with a CUSTOM seed the stock
     // fork APIs cannot express.
-    ...buildSidechatApi(ctx),
+    ...buildSidechatApi(ctx, assistantLive),
   }
 }
 
@@ -866,7 +971,14 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
   })
 
   // ── JSON API ────────────────────────────────────────────────────────────
-  const api = buildApi(ctx, ptyManager, agentPtyRegistry, resolved, terminalShell, () => settingsFace)
+  // The live assistant stream buffer: DSH 0.1.5 publishes in-flight model
+  // deltas as process-local `agent/assistant-stream` frames instead of the
+  // durable `assistant/chunk` events 0.1.2 logged, so the side-chat
+  // transcript and the inherited in-progress snapshot read them here. The
+  // effect releases the listener on fiber disposal.
+  const assistantLive = createAssistantLiveBuffer(ctx)
+  ctx.effect(() => () => { assistantLive.dispose() }, 'dsh-better-sidebar: live assistant stream buffer')
+  const api = buildApi(ctx, ptyManager, agentPtyRegistry, resolved, terminalShell, () => settingsFace, assistantLive)
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: '/sidebar/api',
@@ -891,6 +1003,9 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
         if (handler === undefined) {
           throw new SidebarError('not-found', `unknown sidebar API method "${method}"`, 404)
         }
+        // A long-running method (the HTML preview snapshot) stops reading the
+        // workspace once the caller is gone, rather than finishing the build
+        // for a response nobody will read.
         const abort = new AbortController()
         const closed = (): void => { abort.abort() }
         res.on?.('close', closed)
@@ -973,19 +1088,35 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
         const cwd = await sessionCwdOf(ctx, sessionId, url.searchParams.get('cwd') ?? undefined)
         const path = await ensureWorkspacePath(cwd, raw, fenceEnabledOf(() => settingsFace))
         const info = await stat(path)
-        if (!info.isFile() || info.size > resolved.mediaLimit) {
+        const media = isStreamableMedia(path)
+        const limit = media ? Math.max(resolved.mediaLimit, MEDIA_STREAM_LIMIT) : resolved.mediaLimit
+        if (!info.isFile() || info.size > limit) {
           throw new SidebarError('fs-error', 'not a file or too large', 400)
         }
         const type = mediaTypeForPath(path)
-        const body = await readFile(path)
         // Raw bytes either way (binary-safe); ?download=1 switches the
         // disposition so the browser saves the file instead of showing it.
-        const headers: Record<string, string> = { 'content-type': type, 'cache-control': 'no-cache' }
+        // accept-ranges is advertised so the media viewers can seek.
+        const headers: Record<string, string> = {
+          'content-type': type,
+          'cache-control': 'no-cache',
+          'accept-ranges': 'bytes',
+        }
         if (url.searchParams.get('download') === '1') {
           headers['content-disposition'] = `attachment; filename*=UTF-8''${encodeURIComponent(basename(path))}`
         }
+        const range = req.headers.range
+        const window = typeof range === 'string' ? parseByteRange(range, info.size) : null
+        if (window !== null) {
+          headers['content-range'] = `bytes ${window.start}-${window.end}/${info.size}`
+          headers['content-length'] = String(window.end - window.start + 1)
+          res.writeHead(206, headers)
+          pipeFile(path, res, window)
+          return
+        }
+        headers['content-length'] = String(info.size)
         res.writeHead(200, headers)
-        res.end(body)
+        pipeFile(path, res)
       } catch (error) {
         writeError(res, error)
       }
@@ -1191,6 +1322,38 @@ async function attachAgentList(
 }
 
 /**
+ * The WS close reason for a failed terminal attach. A missing configured
+ * shell gets a SHORT machine-readable marker (`shell-not-found:<name>`,
+ * capped by BYTES — a WS close reason allows at most 123 bytes, which `ws`
+ * validates with `Buffer.byteLength`) that the client maps to a localized,
+ * actionable banner; every other failure keeps the raw message (the
+ * model-side tool errors read it verbatim).
+ */
+export function wsCloseReasonOf(error: unknown): string {
+  if (error instanceof SidebarError && error.code === 'shell-not-found') {
+    const name = truncateUtf8Bytes(shellDisplayName(String(error.meta?.shell ?? '')), 100)
+    return `shell-not-found:${name}`
+  }
+  return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Truncate to at most `maxBytes` UTF-8 bytes without splitting a code point.
+ * A character-count `slice` does not bound the WS close reason: `ws` measures
+ * `Buffer.byteLength` against its 123-byte cap, and the resulting throw would
+ * replace the very error the reason describes.
+ */
+function truncateUtf8Bytes(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(value) <= maxBytes) return value
+  let truncated = ''
+  for (const character of value) {
+    if (Buffer.byteLength(truncated + character) > maxBytes) break
+    truncated += character
+  }
+  return truncated
+}
+
+/**
  * Wire one terminal socket to its pty: replay transcript, pump both ways.
  * Two attach modes share the wire protocol:
  * - `?uuid=...` attaches to an agent-owned terminal (created by the
@@ -1318,7 +1481,7 @@ async function attachTerminal(
       }
     })
   } catch (error) {
-    ws.close(1011, error instanceof Error ? error.message : String(error))
+    ws.close(1011, wsCloseReasonOf(error))
   }
 }
 

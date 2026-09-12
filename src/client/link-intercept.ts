@@ -1,3 +1,5 @@
+import { isCandidateFilePath } from './candidate-paths.ts'
+
 /**
  * Chat/GUI external-link interception: clicking an http(s) link that points
  * OUTSIDE the GUI (chat messages, tool rows, prose mentions) opens the
@@ -37,6 +39,56 @@ export function shouldInterceptLink(anchorHref: string, selfOrigin: string): str
   return url.href
 }
 
+/**
+ * Resolve an anchor to a workspace-relative file path, or null when the
+ * target is not a workspace file.
+ *
+ * The host's markdown sanitizer drops every destination that is not
+ * http(s)/mailto, so `[x](./docs/a.png)` renders as inert text with no anchor
+ * at all — the host has no relative-link handler to fall through to. This is
+ * the recognizer for that gap: explicit `./`/`../` syntax, a bare candidate
+ * path, and an anchor the browser resolved against the GUI's own origin
+ * (which is what a relative href looks like once `.href` is read).
+ */
+export function shouldInterceptRelativeFile(
+  rawHref: string | null,
+  anchorHref: string,
+  selfOrigin: string,
+): string | null {
+  if (rawHref === null) return null
+  const trimmed = rawHref.trim()
+  if (trimmed === '' || trimmed.startsWith('#')) return null
+
+  // 1. Explicit relative syntax: `./foo.png`
+  if (trimmed.startsWith('./')) {
+    return trimmed.slice(2)
+  }
+  if (trimmed.startsWith('../')) {
+    return trimmed
+  }
+
+  // 2. A candidate path with no web protocol.
+  if (!trimmed.includes('://') && isCandidateFilePath(trimmed)) {
+    return trimmed.replace(/^\/+/, '')
+  }
+
+  // 3. An anchor resolved against the GUI origin, e.g.
+  //    `http://127.0.0.1:43120/docs/demo.png`.
+  try {
+    const url = new URL(anchorHref)
+    if (url.origin === new URL(selfOrigin).origin) {
+      const pathname = decodeURIComponent(url.pathname.replace(/^\/+/, ''))
+      if (isCandidateFilePath(pathname)) {
+        return pathname
+      }
+    }
+  } catch {
+    // Unparsable (never in practice): not a relative file.
+  }
+
+  return null
+}
+
 /** Whether a left-click may be taken over (unmodified left click only). */
 export function isPlainLeftClick(event: { button: number; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean }): boolean {
   return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey
@@ -52,6 +104,9 @@ export function registerLinkInterception(opts: {
   takeoverEnabled: (url: URL) => boolean
   /** Open the sidebar tab at `url` (the caller resolves the target type). */
   openInSidebar: (url: string) => void
+  /** Open a workspace-relative link target in the sidebar's file surface.
+   *  Omitted → relative links stay inert, exactly as the host renders them. */
+  openFileInSidebar?: (path: string) => void
   /** The GUI's own origin (window.location.origin at registration). */
   selfOrigin: string
 }): () => void {
@@ -62,6 +117,16 @@ export function registerLinkInterception(opts: {
     if (target === null || typeof (target as Element).closest !== 'function') return
     const anchor = (target as Element).closest('a[href]') as HTMLAnchorElement | null
     if (anchor === null) return
+    // Relative workspace links first: they carry no absolute URL worth
+    // routing through the external-link policy below.
+    if (opts.openFileInSidebar !== undefined) {
+      const relative = shouldInterceptRelativeFile(anchor.getAttribute('href'), anchor.href, opts.selfOrigin)
+      if (relative !== null) {
+        event.preventDefault()
+        opts.openFileInSidebar(relative)
+        return
+      }
+    }
     const url = shouldInterceptLink(anchor.href, opts.selfOrigin)
     if (url === null) return
     if (!opts.takeoverEnabled(new URL(url))) return

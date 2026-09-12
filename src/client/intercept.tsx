@@ -8,14 +8,21 @@
  */
 import { IconCodeOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Context } from '../context-types.ts'
-import { firstLeaf, revealPaths, togglePanel, type SidebarStore } from './state.ts'
+import { isCandidateFilePath, isDirectoryPath } from './candidate-paths.ts'
+import { revealPaths, type SidebarStore } from './state.ts'
 import { t } from './locales.ts'
 import { resolveSidebarPath, selectProducedFiles } from './produced-files.ts'
-import { wrapOpenWorkspacePath, type OpenWorkspacePathService } from './openpath-intercept.ts'
 import css from './sidebar.module.css'
 
 /** Open a file in the sidebar's editor (used by the intercepted row and the explorer). */
 export function openSidebarFile(ctx: Context, store: SidebarStore, sessionId: string, path: string): void {
+  // A directory carries no editor content: the editor would open an empty
+  // buffer, so the explorer (where the row can actually be shown) is the only
+  // meaningful destination.
+  if (isDirectoryPath(path)) {
+    revealInExplorer(ctx, store, sessionId, [path])
+    return
+  }
   const summary = ctx.sessions.list.getSnapshot().byId[sessionId]
   const absolute = resolveSidebarPath(summary?.cwd, path)
   const at = Math.max(absolute.lastIndexOf('/'), absolute.lastIndexOf('\\'))
@@ -26,17 +33,9 @@ export function openSidebarFile(ctx: Context, store: SidebarStore, sessionId: st
 }
 
 /**
- * The produced files the turn-tail selector last matched for the visible
- * session. The "Show in folder" gesture carries no file path of its own
- * (`'.'`), so the reveal highlights exactly these rows when available.
- */
-let lastProduced: readonly string[] = []
-
-/**
  * Reveal the produced files in the sidebar explorer: expand their parent
- * directories, highlight the rows, and focus the explorer tab (expanding the
- * hosting panel when it is collapsed). Unknown files fall back to revealing
- * the workspace root itself.
+ * directories, highlight the rows, and focus the explorer tab. Unknown
+ * files fall back to revealing the workspace root itself.
  */
 export function revealInExplorer(
   ctx: Context,
@@ -53,15 +52,6 @@ export function revealInExplorer(
     ? files.map(path => resolveSidebarPath(cwd, path))
     : cwd === undefined ? [] : [cwd]
   store.reduce(state => revealPaths(state, cwd, targets))
-  // A type-only open never auto-expands the panel (only content opens do,
-  // see service.openTab) — so a reveal opens the panel itself when it is
-  // collapsed, exactly like the subagent auto-open flows, or the highlight
-  // would be set on an invisible panel.
-  store.reduce(s => (s.panelOpen ? s : togglePanel(s)))
-  // Pin the landing to the right panel: the files window must appear where
-  // the panel just expanded, not in a bottom-panel pane the user last
-  // touched.
-  store.reduce(s => ({ ...s, activePane: firstLeaf(s.splits).id }))
   // Focus the single-instance editor home tab (the files window) where the
   // reveal highlight renders. Read via ctx.get like every other internal
   // consumer (#357): the provider is not on this fiber chain, so a direct
@@ -137,9 +127,7 @@ export function registerTurnTailInterception(ctx: Context, store: SidebarStore):
     select: (owner) => {
       if (store.getSuspended()) return null
       if (store.getPrefs().tabsEnabled['editor'] === false) return null
-      const matched = selectProducedFiles(owner)
-      if (matched !== null) lastProduced = matched
-      return matched
+      return selectProducedFiles(owner)
     },
     priority: -1,
     registrant: 'dsh-better-sidebar',
@@ -150,37 +138,76 @@ export function registerTurnTailInterception(ctx: Context, store: SidebarStore):
   }, SidebarProducedFiles))
 }
 
+export interface MarkdownFileMention {
+  open: () => void
+  label: string
+  title?: string
+}
+
+export interface MarkdownFileMentions {
+  resolve(value: string): MarkdownFileMention | undefined
+}
+
+export interface TurnTailOwnerProps {
+  seq: number
+  openFile: (path: string) => void
+  turn?: unknown
+  nodes?: unknown
+}
+
+/** The host's mention face. 0.1.5 passes the session id as a second argument
+ *  — the host resolver needs it to open presented files. */
+export interface ChatFileMentions {
+  forClosing(owner: TurnTailOwnerProps, sessionId: string): MarkdownFileMentions | undefined
+}
+
 /**
- * Register the chat file-open interception: shadows
- * `remote.session.openWorkspacePath` — the single funnel every chat-side
- * file open goes through on alpha hosts (tool-row path links, the
- * produced-files row, prose mentions, inline-code paths) — so opens land in
- * the sidebar editor instead of the Host OS. The folder-reveal gesture
- * ("Show in folder" passes `'.'`) is the one exception: it is routed to the
- * explorer. Gated by BOTH the `interceptOpenPath` pref and the editor tab's
- * enable switch; declined opens fall through to the original remote call.
+ * Widen the chat's file mentions beyond the host's produced-files vocabulary.
  *
- * The `remote.session` namespace service mounts asynchronously (the gateway
- * client creates it when the session-controller contribution arrives) and
- * is recreated on contribution remounts, so the wrapper installs through
- * `ctx.inject`: the callback runs once the service exists and re-runs after
- * every remount, re-applying the shadow on the fresh instance. Returns the
- * disposer (disposes the inject fiber, which restores the original method
- * descriptor — HMR-safe).
+ * The host resolver is deliberate about its scope: its word list comes from
+ * the mutation tools' own `locations` — "never from the closing prose" — and
+ * matches an exact path or a unique basename only. A workspace path the
+ * assistant merely *mentions* in inline code (`docs/evidence/demo.png`,
+ * `package.json`) therefore stays inert unless the closing turn produced it.
+ *
+ * The wrapper chains onto the host resolver rather than replacing it: the
+ * original answer wins whenever it exists, and only an unmatched token falls
+ * through to the candidate-path heuristic. The suspension switch and the
+ * editor tab's enable toggle gate that fallback, so with the sidebar off the
+ * host's behavior is untouched.
  */
-export function registerOpenPathInterception(ctx: Context, store: SidebarStore): () => void {
-  const fiber = ctx.inject(['remote.session'], (fctx) => {
-    fctx.effect(() => {
-      const service = fctx.get('remote.session') as OpenWorkspacePathService
-      return wrapOpenWorkspacePath(service, {
-        takeoverEnabled: () => !store.getSuspended()
-          && store.getPrefs().interceptOpenPath !== false
-          && store.getPrefs().tabsEnabled['editor'] !== false,
-        currentSessionId: () => ctx.sessions.list.getSnapshot().current,
-        openInSidebar: (path, sessionId) => { openSidebarFile(ctx, store, sessionId, path) },
-        revealInExplorer: (_path, sessionId) => { revealInExplorer(ctx, store, sessionId, lastProduced) },
-      })
-    }, 'dsh-better-sidebar: open-path interception wrap')
-  })
-  return () => { void fiber.dispose() }
+export function registerFileMentionsInterception(ctx: Context, store: SidebarStore): () => void {
+  const service = ctx.get('chatFileMentions') as ChatFileMentions | undefined
+  if (service === undefined || typeof service.forClosing !== 'function') return () => {}
+  if ((service as { __betterSidebarEnhanced?: boolean }).__betterSidebarEnhanced === true) return () => {}
+
+  const originalForClosing = service.forClosing
+  service.forClosing = function (this: ChatFileMentions, owner: TurnTailOwnerProps, sessionId: string) {
+    // Forward the session id verbatim: the host resolver opens *presented*
+    // files with it, and dropping it sends `undefined` into that call.
+    const original = originalForClosing.call(this, owner, sessionId)
+    return {
+      resolve(value: string): MarkdownFileMention | undefined {
+        const matched = original?.resolve(value)
+        if (matched !== undefined) return matched
+        if (store.getSuspended()) return undefined
+        if (store.getPrefs().tabsEnabled['editor'] === false) return undefined
+        if (!isCandidateFilePath(value)) return undefined
+        return {
+          // owner.openFile is the host's own "open a workspace path" seam
+          // (it resolves through sidebarRight.openResource), so the open
+          // lands where the host would have put it.
+          open: () => { owner.openFile(value) },
+          label: value,
+          title: value,
+        }
+      },
+    }
+  }
+  ;(service as { __betterSidebarEnhanced?: boolean }).__betterSidebarEnhanced = true
+
+  return () => {
+    service.forClosing = originalForClosing
+    delete (service as { __betterSidebarEnhanced?: boolean }).__betterSidebarEnhanced
+  }
 }

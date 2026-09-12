@@ -1,23 +1,11 @@
 /**
  * Icons the sidebar needs beyond the primitives set: a terminal glyph (the
- * icon library has none), a diff glyph, and the two panel-toggle glyphs for
- * the top-right cluster. Per-tab icons live on the tab descriptors
+ * icon library has none), a diff glyph, and the bottom-workbench toggle.
+ * Per-tab icons live on the tab descriptors
  * (`descriptor.icon`), not in a type-keyed switch — the icon mapping was
  * registry-ized with the tab types.
  */
 import type { IconProps } from '@deepseek-ai/dsh-client-ui-primitives'
-
-/**
- * Right-panel toggle glyph (the "侧拉" button): a frame with a filled strip
- * along its RIGHT edge, in the app's outline style (1.5px stroke,
- * currentColor).
- */
-export const IconPanelRightOutline16 = ({ size = 16, className }: IconProps) => (
-  <svg width={size} height={size} className={className} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <rect x="1.5" y="2" width="13" height="12" rx="2.5" stroke="currentColor" strokeWidth="1.5" />
-    <rect x="10.5" y="3.25" width="2.75" height="9.5" rx="1" fill="currentColor" stroke="none" />
-  </svg>
-)
 
 /**
  * Bottom-panel toggle glyph (the "底栏" button): a frame with a filled strip
@@ -162,14 +150,18 @@ export const IconVscode16 = ({ size = 16, className }: IconProps) => (
   </svg>
 )
 
-/**
- * Free-window glyph in the app's outline style (1.5px stroke, currentColor):
- * a background frame with a detached rounded mini-window floating over its
- * top-right — the changes tab's "diff opens as a free window" setting.
- */
-export const IconFloatWindowOutline16 = ({ size = 16, className }: IconProps) => (
+/** Video viewer glyph: a screen rectangle with a play triangle. */
+export const IconVideoOutline16 = ({ size = 16, className }: IconProps) => (
   <svg width={size} height={size} className={className} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <rect x="1.5" y="4.5" width="10" height="10" rx="2" stroke="currentColor" strokeWidth="1.5" />
-    <rect x="9.5" y="1.5" width="5" height="5" rx="1.5" stroke="currentColor" strokeWidth="1.5" fill="none" />
+    <rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" strokeWidth="1.5" />
+    <polygon points="6.5 5.5 11 8 6.5 10.5 6.5 5.5" fill="currentColor" />
+  </svg>
+)
+
+/** Audio viewer glyph: a speaker cone with two sound waves. */
+export const IconAudioOutline16 = ({ size = 16, className }: IconProps) => (
+  <svg width={size} height={size} className={className} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M7.5 2.5 4.5 5.5H2v5h2.5l3 3V2.5Z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+    <path d="M10.5 5.5a3.5 3.5 0 0 1 0 5M12.5 3.5a6.5 6.5 0 0 1 0 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
   </svg>
 )
