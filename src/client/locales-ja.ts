@@ -286,6 +286,8 @@ export const ja: Record<string, string> = {
   viewerCode: 'コード',
   viewerBinary: 'バイナリダウンロード',
   viewerHtml: 'HTML',
+  viewerVideo: '動画',
+  viewerAudio: '音声',
   browser: 'ブラウザー',
   browserPlaceholder: 'URL を入力、例: example.com',
   browserGo: '開く',

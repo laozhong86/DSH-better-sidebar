@@ -11,11 +11,11 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { IconCloseOutline16, IconRefreshOutline16, IconRightUpOutline16, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SessionScope } from '../api.ts'
-import { api, htmlUrl } from '../api.ts'
+import { api } from '../api.ts'
 import { t } from '../locales.ts'
 import { baseName } from '../paths.ts'
 import { resolveSidebarPath } from '../produced-files.ts'
-import { HTML_IFRAME_SANDBOX } from '../html-preview.ts'
+import { HtmlPreview } from '../HtmlPreview.tsx'
 import type { SidebarDiffRef, SidebarTab } from '../state.ts'
 import { DiffRows, ReadRows } from '../diff/DiffRows.tsx'
 import { PdfView } from '../PdfView.tsx'
@@ -66,22 +66,9 @@ function diffOf(op: FileOp, prior: string | undefined): readonly DiffRow[] {
   return []
 }
 
-/** The render view of one html op target: the route-src iframe. Extracted
- *  (and exported) so the always-sandboxed contract is pinned directly by the
- *  sandbox spec — this surface has NO no-sandbox escape hatch. */
-export function HtmlRenderPreview(props: { src: string; title: string }) {
-  return (
-    <div className={css.htmlPane}>
-      <iframe
-        className={css.htmlFrame}
-        title={props.title}
-        src={props.src}
-        sandbox={HTML_IFRAME_SANDBOX}
-        referrerPolicy="no-referrer"
-        allow=""
-      />
-    </div>
-  )
+/** Saved HTML uses the same immutable isolation boundary as the editor. */
+export function HtmlRenderPreview(props: { scope: SessionScope; path: string }) {
+  return <div className={css.htmlPane}><HtmlPreview scope={props.scope} path={props.path} className={css.htmlFrame} /></div>
 }
 
 /** One header pill toggle — the redaction / reading / render toggles share
@@ -374,18 +361,12 @@ export function DiffPane({ target, scope, height, onHeightCommit, onClose, onExp
     [mdOp, reading, readingSrc, scope, target],
   )
 
-  // ── HTML render mode: .html/.htm op targets (the editor html viewer's
-  //    ext set) load the SAVED file through the same /sidebar/html route the
-  //    editor's html viewer uses — relative assets (./style.css, img/x.png)
-  //    resolve inside the route, and a segmented read still renders the
-  //    whole document (the route serves the file, not the op snapshot). The
-  //    frame is always sandboxed (the attribute plus the route's CSP sandbox
-  //    header); the editor tab owns the warned no-sandbox escape hatch. ──
+  // HTML renders the saved file snapshot, not the operation's partial text.
   const htmlOp = target.kind === 'op' && !target.op.isError && /\.(html?)$/i.test(target.path)
   const [rendering, setRendering] = useState(false)
   const htmlRenderSrc = useMemo(() => {
     if (!htmlOp || target.kind !== 'op') return ''
-    return htmlUrl(scope, resolveSidebarPath(scope.cwd, target.path))
+    return resolveSidebarPath(scope.cwd, target.path)
   }, [htmlOp, scope, target])
 
   // ── PDF render mode: .pdf op targets (read / write / edit, non-error) reuse
@@ -548,7 +529,7 @@ export function DiffPane({ target, scope, height, onHeightCommit, onClose, onExp
         </button>
       </div>
       {target.kind === 'op' && htmlOp && rendering && htmlRenderSrc !== ''
-        ? <HtmlRenderPreview src={htmlRenderSrc} title={target.path} />
+        ? <HtmlRenderPreview scope={scope} path={htmlRenderSrc} />
         : target.kind === 'op' && pdfOp && renderingPdf && pdfRenderPath !== ''
         ? (
           <div className={css.htmlPane}>

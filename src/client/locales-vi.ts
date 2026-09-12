@@ -286,6 +286,8 @@ export const vi: Record<string, string> = {
   viewerCode: 'Mã',
   viewerBinary: 'Tải nhị phân',
   viewerHtml: 'HTML',
+  viewerVideo: 'Video',
+  viewerAudio: 'Âm thanh',
   browser: 'Trình duyệt',
   browserPlaceholder: 'Nhập URL, vd: example.com',
   browserGo: 'Đi',

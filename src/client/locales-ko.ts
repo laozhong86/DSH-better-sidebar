@@ -278,6 +278,8 @@ export const ko: Record<string, string> = {
   viewerCode: '코드',
   viewerBinary: '이진 다운로드',
   viewerHtml: 'HTML',
+  viewerVideo: '동영상',
+  viewerAudio: '오디오',
   browser: '브라우저',
   browserPlaceholder: 'URL 입력, 예: example.com',
   browserGo: '이동',

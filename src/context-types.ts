@@ -44,6 +44,8 @@ export interface SidebarHttpRequest {
 /** The response face route handlers write to (structural subset of node's
  *  ServerResponse: the status/header/body writes the routes use). */
 export interface SidebarHttpResponse {
+  on?(event: 'close', listener: () => void): unknown
+  off?(event: 'close', listener: () => void): unknown
   statusCode: number
   writeHead(status: number, headers?: Record<string, string>): void
   end(body?: string | Uint8Array): void

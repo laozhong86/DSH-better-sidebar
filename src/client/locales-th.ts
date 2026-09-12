@@ -286,6 +286,8 @@ export const th: Record<string, string> = {
   viewerCode: 'โค้ด',
   viewerBinary: 'ดาวน์โหลดไบนารี',
   viewerHtml: 'HTML',
+  viewerVideo: 'วิดีโอ',
+  viewerAudio: 'เสียง',
   browser: 'เบราว์เซอร์',
   browserPlaceholder: 'กรอก URL เช่น example.com',
   browserGo: 'ไป',

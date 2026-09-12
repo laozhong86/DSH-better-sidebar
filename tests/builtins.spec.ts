@@ -269,10 +269,10 @@ describe('built-in tab registrations', () => {
 })
 
 describe('built-in file viewer registrations', () => {
-  it('registers the 6 built-in file viewers (office previews live in the recommended office plugin)', () => {
+  it('registers the 8 built-in file viewers (office previews live in the recommended office plugin)', () => {
     const { service } = setup()
     expect(service.getFileViewers().map(v => v.id).sort()).toEqual(
-      ['binary-download', 'code', 'html', 'image', 'markdown', 'pdf'],
+      ['audio', 'binary-download', 'code', 'html', 'image', 'markdown', 'pdf', 'video'],
     )
     // Office previews are not built in: docx/xlsx/pptx files fall through to
     // the download-only binary viewer (or a registered office plugin).
@@ -305,14 +305,10 @@ describe('built-in file viewer registrations', () => {
     expect(service.matchFileViewer('index.HTML')?.id).toBe('html')
   })
 
-  it('the html viewer declares its sandbox and default-unsafe related settings', () => {
+  it('the html viewer exposes no sandbox escape settings', () => {
     const { service } = setup()
     const toggles = service.getFileViewers().find(v => v.id === 'html')?.settings?.toggles ?? []
-    expect(toggles.map(t => t.key)).toEqual(['htmlViewerNoSandbox', 'htmlViewerDefaultUnsafe'])
-    expect(toggles[0]?.title).toBeDefined()
-    expect(toggles[0]?.desc).toBeDefined()
-    expect(toggles[1]?.title).toBeDefined()
-    expect(toggles[1]?.desc).toBeDefined()
+    expect(toggles).toEqual([])
   })
 
   it('binary-download claims legacy office by extension (office previews are not built in)', () => {

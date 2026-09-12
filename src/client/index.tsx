@@ -17,7 +17,7 @@ import { revalidateChunksOnReactivate, setChunkModuleSystem } from './chunk-load
 import { registerBuiltins } from './builtins/index.ts'
 import { Sidebar } from './Sidebar.tsx'
 import { RenderBoundary } from './RenderBoundary.tsx'
-import { registerTurnTailInterception } from './intercept.tsx'
+import { openSidebarFile, registerFileMentionsInterception, registerTurnTailInterception } from './intercept.tsx'
 import { createNativeTabRecords } from './native/tab-adapter.tsx'
 import { registerNativeSurface } from './native/index.ts'
 import { registerBottomToggle } from './sidebar/bottom-toggle.tsx'
@@ -369,6 +369,18 @@ export function apply(ctx: Context): void {
     ctx.effect(
       () => {
         try {
+          return registerFileMentionsInterception(ctx, sidebarStore)
+        } catch (error) {
+          fail('file mentions interception', error)
+          return () => {}
+        }
+      },
+      'dsh-better-sidebar: file-mentions interception',
+    )
+
+    ctx.effect(
+      () => {
+        try {
           // External http(s) links in the chat/GUI open the sidebar instead
           // of a new window. Gated on the browserInterceptLinks MASTER pref,
           // the URL's protocol flag (browserInterceptHttp / Https — https
@@ -399,6 +411,15 @@ export function apply(ctx: Context): void {
               try { title = new URL(url).hostname } catch { /* keep the default title */ }
               const type = urlTargetOf(new URL(url)) ?? 'browser'
               ctx.get('betterSidebar')?.openTab({ type, url, title })
+            },
+            // A relative workspace link has no usable absolute URL, so the
+            // host renders it as inert text; route it to the file surface
+            // before the external-link policy is consulted.
+            openFileInSidebar: (relPath) => {
+              const sessionId = ctx.sessions.list.getSnapshot().current
+              if (sessionId !== undefined) {
+                openSidebarFile(ctx, sidebarStore, sessionId, relPath)
+              }
             },
             selfOrigin: window.location.origin,
           })

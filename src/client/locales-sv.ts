@@ -269,6 +269,8 @@ export const sv: Record<string, string> = {
   viewerCode: 'Kod',
   viewerBinary: 'Binär nedladdning',
   viewerHtml: 'HTML',
+  viewerVideo: 'Video',
+  viewerAudio: 'Audio',
   browser: 'Webbläsare',
   browserPlaceholder: 'Ange en URL, t.ex. example.com',
   browserGo: 'Gå',

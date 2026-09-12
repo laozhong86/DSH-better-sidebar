@@ -287,6 +287,8 @@ export const ar: Record<string, string> = {
   viewerCode: 'كود',
   viewerBinary: 'تنزيل ثنائي',
   viewerHtml: 'HTML',
+  viewerVideo: 'فيديو',
+  viewerAudio: 'صوت',
   browser: 'المتصفح',
   browserPlaceholder: 'أدخل عنوان URL، مثل example.com',
   browserGo: 'اذهب',

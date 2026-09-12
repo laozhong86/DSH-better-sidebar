@@ -8,6 +8,7 @@
  */
 import { IconCodeOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Context } from '../context-types.ts'
+import { isCandidateFilePath, isDirectoryPath } from './candidate-paths.ts'
 import { revealPaths, type SidebarStore } from './state.ts'
 import { t } from './locales.ts'
 import { resolveSidebarPath, selectProducedFiles } from './produced-files.ts'
@@ -15,6 +16,13 @@ import css from './sidebar.module.css'
 
 /** Open a file in the sidebar's editor (used by the intercepted row and the explorer). */
 export function openSidebarFile(ctx: Context, store: SidebarStore, sessionId: string, path: string): void {
+  // A directory carries no editor content: the editor would open an empty
+  // buffer, so the explorer (where the row can actually be shown) is the only
+  // meaningful destination.
+  if (isDirectoryPath(path)) {
+    revealInExplorer(ctx, store, sessionId, [path])
+    return
+  }
   const summary = ctx.sessions.list.getSnapshot().byId[sessionId]
   const absolute = resolveSidebarPath(summary?.cwd, path)
   const at = Math.max(absolute.lastIndexOf('/'), absolute.lastIndexOf('\\'))
@@ -128,4 +136,78 @@ export function registerTurnTailInterception(ctx: Context, store: SidebarStore):
       onShowInFolder: (files: readonly string[]) => { revealInExplorer(ctx, store, sessionId, files) },
     }),
   }, SidebarProducedFiles))
+}
+
+export interface MarkdownFileMention {
+  open: () => void
+  label: string
+  title?: string
+}
+
+export interface MarkdownFileMentions {
+  resolve(value: string): MarkdownFileMention | undefined
+}
+
+export interface TurnTailOwnerProps {
+  seq: number
+  openFile: (path: string) => void
+  turn?: unknown
+  nodes?: unknown
+}
+
+/** The host's mention face. 0.1.5 passes the session id as a second argument
+ *  — the host resolver needs it to open presented files. */
+export interface ChatFileMentions {
+  forClosing(owner: TurnTailOwnerProps, sessionId: string): MarkdownFileMentions | undefined
+}
+
+/**
+ * Widen the chat's file mentions beyond the host's produced-files vocabulary.
+ *
+ * The host resolver is deliberate about its scope: its word list comes from
+ * the mutation tools' own `locations` — "never from the closing prose" — and
+ * matches an exact path or a unique basename only. A workspace path the
+ * assistant merely *mentions* in inline code (`docs/evidence/demo.png`,
+ * `package.json`) therefore stays inert unless the closing turn produced it.
+ *
+ * The wrapper chains onto the host resolver rather than replacing it: the
+ * original answer wins whenever it exists, and only an unmatched token falls
+ * through to the candidate-path heuristic. The suspension switch and the
+ * editor tab's enable toggle gate that fallback, so with the sidebar off the
+ * host's behavior is untouched.
+ */
+export function registerFileMentionsInterception(ctx: Context, store: SidebarStore): () => void {
+  const service = ctx.get('chatFileMentions') as ChatFileMentions | undefined
+  if (service === undefined || typeof service.forClosing !== 'function') return () => {}
+  if ((service as { __betterSidebarEnhanced?: boolean }).__betterSidebarEnhanced === true) return () => {}
+
+  const originalForClosing = service.forClosing
+  service.forClosing = function (this: ChatFileMentions, owner: TurnTailOwnerProps, sessionId: string) {
+    // Forward the session id verbatim: the host resolver opens *presented*
+    // files with it, and dropping it sends `undefined` into that call.
+    const original = originalForClosing.call(this, owner, sessionId)
+    return {
+      resolve(value: string): MarkdownFileMention | undefined {
+        const matched = original?.resolve(value)
+        if (matched !== undefined) return matched
+        if (store.getSuspended()) return undefined
+        if (store.getPrefs().tabsEnabled['editor'] === false) return undefined
+        if (!isCandidateFilePath(value)) return undefined
+        return {
+          // owner.openFile is the host's own "open a workspace path" seam
+          // (it resolves through sidebarRight.openResource), so the open
+          // lands where the host would have put it.
+          open: () => { owner.openFile(value) },
+          label: value,
+          title: value,
+        }
+      },
+    }
+  }
+  ;(service as { __betterSidebarEnhanced?: boolean }).__betterSidebarEnhanced = true
+
+  return () => {
+    service.forClosing = originalForClosing
+    delete (service as { __betterSidebarEnhanced?: boolean }).__betterSidebarEnhanced
+  }
 }

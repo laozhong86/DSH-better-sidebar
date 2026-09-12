@@ -279,6 +279,8 @@ export const fr: Record<string, string> = {
   viewerCode: 'Code',
   viewerBinary: 'Téléchargement binaire',
   viewerHtml: 'HTML',
+  viewerVideo: 'Vidéo',
+  viewerAudio: 'Audio',
   browser: 'Navigateur',
   browserPlaceholder: 'Saisissez une adresse, ex. example.com',
   browserGo: 'Aller',

@@ -286,6 +286,8 @@ export const hi: Record<string, string> = {
   viewerCode: 'कोड',
   viewerBinary: 'बाइनरी डाउनलोड',
   viewerHtml: 'HTML',
+  viewerVideo: 'वीडियो',
+  viewerAudio: 'ऑडियो',
   browser: 'ब्राउज़र',
   browserPlaceholder: 'URL दर्ज करें, जैसे example.com',
   browserGo: 'जाएं',

@@ -13,12 +13,13 @@
  * session's authoritative cwd comes from the session store, and terminal
  * processes are keyed by session.
  */
+import { createReadStream } from 'node:fs'
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, extname, isAbsolute, join } from 'node:path'
 import type { IncomingMessage } from 'node:http'
-import type { Duplex } from 'node:stream'
+import type { Duplex, Writable } from 'node:stream'
 import { WebSocket, WebSocketServer } from 'ws'
-import type { Context, SidebarHttpRequest, SidebarSessionEvent } from './context-types.ts'
+import type { Context, SidebarHttpRequest, SidebarHttpResponse, SidebarSessionEvent } from './context-types.ts'
 import {
   Config,
   PrefsSchema,
@@ -34,6 +35,7 @@ import { resolveSessionPath } from './session-path.ts'
 import { renameWorkspaceEntry, removeWorkspaceEntry, writeWorkspaceUpload } from './fs-operations.ts'
 import { ensureWorkspacePath, ensureWorkspaceWritePath } from './path-security.ts'
 import { searchFiles } from './fs-search.ts'
+import { buildHtmlPreview } from './html-preview-document.ts'
 import { decodeHtmlUrl } from './html-route.ts'
 import { extractFrameAncestors } from './browser-probe.ts'
 import { isTrustedApiRequest, isLoopbackHostname } from './trust-fence.ts'
@@ -56,7 +58,7 @@ import { buildSubagentLiveApi, type SidebarSubagentLiveRoutes } from './subagent
 import { buildSidechatApi } from './sidechat-routes.ts'
 import { createAssistantLiveBuffer, type AssistantLiveBuffer } from './assistant-live.ts'
 import { readJsonBody, requireString, SidebarError, writeError, writeJson, writeOk } from './wire.ts'
-import { readPersistedSession } from './session-store.ts'
+import { readPersistedSession, readPersistedSessionOf } from './session-store.ts'
 
 export { Config }
 export type { SidebarConfig, ResolvedSidebarConfig }
@@ -96,11 +98,84 @@ const MEDIA_TYPES: Record<string, string> = {
   '.pdf': 'application/pdf',
   '.html': 'text/html',
   '.htm': 'text/html',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.m4v': 'video/x-m4v',
+  '.ogv': 'video/ogg',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.flac': 'audio/flac',
+  '.ogg': 'audio/ogg',
+  '.m4a': 'audio/mp4',
+  '.opus': 'audio/opus',
+  '.aac': 'audio/aac',
 }
 
 /** Content type served by /sidebar/file (binary-safe fallback for unknowns). */
 export function mediaTypeForPath(path: string): string {
   return MEDIA_TYPES[extname(path).toLowerCase()] ?? 'application/octet-stream'
+}
+
+/** Video/audio extensions the media route plays by byte range. */
+const STREAMABLE_MEDIA_EXTS = new Set([
+  '.mp4', '.webm', '.mov', '.m4v', '.ogv',
+  '.mp3', '.wav', '.flac', '.ogg', '.m4a', '.opus', '.aac',
+])
+
+/** Whether the path is a video/audio file (streamed rather than buffered). */
+function isStreamableMedia(path: string): boolean {
+  return STREAMABLE_MEDIA_EXTS.has(extname(path).toLowerCase())
+}
+
+/**
+ * Byte ceiling for a streamed media file. The image route keeps the
+ * configured `mediaLimit` (20 MiB by default) because it hands the whole
+ * body over at once; a video or audio file is read off disk slice by slice,
+ * so it gets this much larger ceiling instead.
+ */
+const MEDIA_STREAM_LIMIT = 500 * 1024 * 1024
+
+/**
+ * Parse a single `bytes=` range header into an inclusive window over `size`.
+ * Handles the `start-end`, `start-` and suffix (`-N`) forms; multi-range
+ * requests and malformed or unsatisfiable windows return null, which the
+ * caller answers with the ordinary 200 body.
+ */
+export function parseByteRange(header: string, size: number): { start: number; end: number } | null {
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim())
+  if (match === null) return null
+  const [, rawStart, rawEnd] = match
+  if (rawStart === '' && rawEnd === '') return null
+  let start: number
+  let end: number
+  if (rawStart === '') {
+    // Suffix form: the final N bytes.
+    const suffix = Number(rawEnd)
+    if (!Number.isSafeInteger(suffix) || suffix <= 0) return null
+    start = Math.max(size - suffix, 0)
+    end = size - 1
+  } else {
+    start = Number(rawStart)
+    end = rawEnd === '' ? size - 1 : Number(rawEnd)
+  }
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) return null
+  if (start < 0 || start >= size || end < start) return null
+  return { start, end: Math.min(end, size - 1) }
+}
+
+/** Stream a file to the response, a byte window of it when one is given.
+ *  The write face the routes use is a structural subset of the server
+ *  response, so it is widened to a stream here rather than at every call. */
+function pipeFile(path: string, res: SidebarHttpResponse, window?: { start: number; end: number }): void {
+  const writable = res as unknown as Writable
+  const stream = window === undefined
+    ? createReadStream(path)
+    : createReadStream(path, { start: window.start, end: window.end })
+  // The file can vanish between stat and open (deleted mid-read): fail the
+  // response instead of leaving an unhandled stream error.
+  stream.on('error', () => { writable.destroy() })
+  stream.pipe(writable)
 }
 
 /**
@@ -215,7 +290,7 @@ async function readText(path: string, readLimit: number): Promise<{
 }
 
 /** One API method dispatch table entry. */
-type ApiMethod = (payload: unknown) => Promise<unknown> | unknown
+type ApiMethod = (payload: unknown, signal?: AbortSignal) => Promise<unknown> | unknown
 
 /**
  * The live face of the side card settings namespace, bound to the settings
@@ -344,6 +419,20 @@ function buildApi(
       const { cwd } = await cwdOf(payload)
       const query = requireString(payload, 'query')
       return searchFiles(cwd, query)
+    },
+    // The HTML preview snapshot. The untrusted preview frame is an opaque
+    // origin the /sidebar/html route cannot serve (its trust fence rejects
+    // sandboxed frames), so the trusted main GUI asks HERE for a fully
+    // self-contained document and hands the frame a string instead of a URL.
+    'html.preview': async (payload, signal) => {
+      const sessionId = requireString(payload, 'sessionId')
+      const attached = ctx.sessions.get(sessionId)?.header.cwd
+      const persisted = attached === undefined ? await readPersistedSessionOf(ctx, sessionId) : undefined
+      const cwd = attached ?? persisted?.header.cwd
+      if (cwd === undefined) {
+        throw new SidebarError('preview-workspace', 'Authoritative session workspace is unavailable')
+      }
+      return buildHtmlPreview(requireAbsolute(cwd), requireString(payload, 'path'), resolved, signal)
     },
     'fs.read': async (payload) => {
       const { cwd } = await cwdOf(payload)
@@ -905,7 +994,14 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
         if (handler === undefined) {
           throw new SidebarError('not-found', `unknown sidebar API method "${method}"`, 404)
         }
-        writeOk(res, await handler(payload))
+        // A long-running method (the HTML preview snapshot) stops reading the
+        // workspace once the caller is gone, rather than finishing the build
+        // for a response nobody will read.
+        const abort = new AbortController()
+        const closed = (): void => { abort.abort() }
+        res.on?.('close', closed)
+        try { writeOk(res, await handler(payload, abort.signal)) }
+        finally { res.off?.('close', closed) }
       } catch (error) {
         writeError(res, error)
       }
@@ -983,19 +1079,35 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
         const cwd = await sessionCwdOf(ctx, sessionId, url.searchParams.get('cwd') ?? undefined)
         const path = await ensureWorkspacePath(cwd, raw, fenceEnabledOf(() => settingsFace))
         const info = await stat(path)
-        if (!info.isFile() || info.size > resolved.mediaLimit) {
+        const media = isStreamableMedia(path)
+        const limit = media ? Math.max(resolved.mediaLimit, MEDIA_STREAM_LIMIT) : resolved.mediaLimit
+        if (!info.isFile() || info.size > limit) {
           throw new SidebarError('fs-error', 'not a file or too large', 400)
         }
         const type = mediaTypeForPath(path)
-        const body = await readFile(path)
         // Raw bytes either way (binary-safe); ?download=1 switches the
         // disposition so the browser saves the file instead of showing it.
-        const headers: Record<string, string> = { 'content-type': type, 'cache-control': 'no-cache' }
+        // accept-ranges is advertised so the media viewers can seek.
+        const headers: Record<string, string> = {
+          'content-type': type,
+          'cache-control': 'no-cache',
+          'accept-ranges': 'bytes',
+        }
         if (url.searchParams.get('download') === '1') {
           headers['content-disposition'] = `attachment; filename*=UTF-8''${encodeURIComponent(basename(path))}`
         }
+        const range = req.headers.range
+        const window = typeof range === 'string' ? parseByteRange(range, info.size) : null
+        if (window !== null) {
+          headers['content-range'] = `bytes ${window.start}-${window.end}/${info.size}`
+          headers['content-length'] = String(window.end - window.start + 1)
+          res.writeHead(206, headers)
+          pipeFile(path, res, window)
+          return
+        }
+        headers['content-length'] = String(info.size)
         res.writeHead(200, headers)
-        res.end(body)
+        pipeFile(path, res)
       } catch (error) {
         writeError(res, error)
       }

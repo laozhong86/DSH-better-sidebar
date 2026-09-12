@@ -25,6 +25,52 @@ export function producedPaths(view: unknown): readonly string[] {
 }
 
 /**
+ * Paths of media a tool result displayed (display_file / read_image).
+ *
+ * A displayed image or video is a deliverable of the turn even though no
+ * mutation tool recorded it: display_file prints a `<path>` tag into its
+ * result message, and both tools carry the file in their own call arguments.
+ * Both shapes are read structurally — the node payload is unknown-safe, like
+ * the rest of this file.
+ */
+export function extractToolMediaPaths(record: unknown): readonly string[] {
+  if (record === null || typeof record !== 'object') return []
+  const rec = record as {
+    message?: { content?: unknown }
+    call?: { name?: unknown; argsRaw?: unknown }
+  }
+  const paths: string[] = []
+
+  // 1. The `<path>` tag display_file prints into the result message.
+  const content = rec.message?.content
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (block === null || typeof block !== 'object') continue
+      const text = (block as { text?: unknown }).text
+      if (typeof text !== 'string') continue
+      const found = /<path>([\s\S]*?)<\/path>/.exec(text)?.[1]?.trim()
+      if (found !== undefined && found !== '') paths.push(found)
+    }
+  }
+
+  // 2. The call arguments of the media tools themselves.
+  const call = rec.call
+  if (call !== undefined && call !== null && typeof call === 'object'
+    && (call.name === 'display_file' || call.name === 'read_image')
+    && typeof call.argsRaw === 'string') {
+    try {
+      const parsed = JSON.parse(call.argsRaw) as { file_path?: unknown; path?: unknown } | null
+      const raw = parsed?.file_path ?? parsed?.path
+      if (typeof raw === 'string' && raw.trim() !== '') paths.push(raw.trim())
+    } catch {
+      // Unparsable call arguments: no media path to report.
+    }
+  }
+
+  return paths
+}
+
+/**
  * Files produced by the turn the assistant at `seq` closes. Accumulation
  * resets on turn boundaries (a user message, or a node reporting a different
  * turn number); paths keep first-seen order and appear once.
@@ -42,6 +88,12 @@ export function producedForClosing(nodes: readonly unknown[], seq: number): read
     if (record.kind === 'tool-result') {
       if (record.isError === true) continue
       for (const path of producedPaths(record.callView)) {
+        if (seen.has(path)) continue
+        seen.add(path)
+        pending.push(path)
+      }
+      // Media the tool displayed ranks as produced by the same turn.
+      for (const path of extractToolMediaPaths(record)) {
         if (seen.has(path)) continue
         seen.add(path)
         pending.push(path)
@@ -98,6 +150,16 @@ export function selectProducedFiles(owner: unknown): readonly string[] | null {
       if (seen.has(produced.path)) continue
       seen.add(produced.path)
       paths.push(produced.path)
+    }
+    // Displayed media is produced by the turn too, but the engine's
+    // deliverables record only carries mutations — merge the node-derived
+    // media paths in so the produced-files row lists them as well.
+    if (Array.isArray(record.nodes)) {
+      for (const path of producedForClosing(record.nodes, seq)) {
+        if (seen.has(path)) continue
+        seen.add(path)
+        paths.push(path)
+      }
     }
     return paths.length === 0 ? null : paths
   }

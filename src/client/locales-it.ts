@@ -277,6 +277,8 @@ export const it: Record<string, string> = {
   viewerCode: 'Codice',
   viewerBinary: 'Download binario',
   viewerHtml: 'HTML',
+  viewerVideo: 'Video',
+  viewerAudio: 'Audio',
   browser: 'Browser',
   browserPlaceholder: 'Inserisca un URL, es. example.com',
   browserGo: 'Vai',
