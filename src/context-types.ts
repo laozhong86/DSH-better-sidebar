@@ -509,7 +509,7 @@ export interface SidebarContextShape {
   /** The session store (host `.get`) and the client list feed (`.list`) faces. */
   sessions: SidebarSessionStore & SidebarSessionsService
   /** The web runtime trust list (bind-derived). */
-  webRuntime: SidebarWebRuntime
+  webStartup: SidebarWebRuntime
   /** The client slot registry (register/inject). */
   slots: SidebarSlotsService
   /** The settings service face (prefs persistence + namespace reads). */

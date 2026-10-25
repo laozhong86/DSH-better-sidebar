@@ -82,7 +82,7 @@ export type {
 export const name = 'dsh-better-sidebar'
 
 /** Services required before mounting: the webserver routes, the session store, the web runtime's trusted hosts, and the tool registry. */
-export const inject = ['webServer', 'sessions', 'webRuntime', 'tools']
+export const inject = ['webServer', 'sessions', 'webStartup', 'tools']
 
 /** Content types for the media route, by extension. */
 const MEDIA_TYPES: Record<string, string> = {
@@ -831,7 +831,7 @@ export function apply(ctx: Context, config?: SidebarConfig): void {
   // plus --trusted-host authorities) — the authoritative source the /api
   // gateway fence derives its list from. Read per request from the live
   // service value; a replaced list takes effect without a plugin restart.
-  const fence = (req: SidebarHttpRequest): boolean => isTrustedApiRequest(req, ctx.webRuntime.trustedHosts)
+  const fence = (req: SidebarHttpRequest): boolean => isTrustedApiRequest(req, ctx.webStartup.trustedHosts)
   // node-pty is loaded lazily, never at module top level (issue #140): a
   // missing or broken install must degrade THIS plugin — terminal tab shows
   // a repair command, agent terminal tools stay unregistered — instead of
